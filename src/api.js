@@ -1,6 +1,9 @@
 import axios from 'axios'
 
-const api = axios.create({ baseURL: import.meta.env.VITE_API_URL || '/api' })
+// Ưu tiên VITE_API_URL; chạy local (npm run dev) dùng proxy /api; build production dùng Render
+const API_URL = import.meta.env.VITE_API_URL
+  || (import.meta.env.DEV ? '/api' : 'https://scct-backend-7vas.onrender.com/api')
+const api = axios.create({ baseURL: API_URL })
 
 // Tự động gắn token từ localStorage khi khởi động
 const token = localStorage.getItem('scct_token')
