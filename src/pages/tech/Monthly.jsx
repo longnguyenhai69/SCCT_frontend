@@ -26,8 +26,8 @@ export default function Monthly() {
 
   useEffect(() => {
     Promise.all([api.get('/reports'), api.get('/tickets/mine')]).then(([r, t]) => {
-      setReports(r.data); setTickets(t.data); setLoading(false)
-    })
+      setReports(r.data); setTickets(t.data)
+    }).finally(() => setLoading(false))
   }, [])
 
   const myRep = reports.find(r => r.user_id === user.id && r.month === ym)

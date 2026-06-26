@@ -11,8 +11,8 @@ export default function MTickets() {
   const [loading, setLoading]   = useState(true)
 
   const load = () => Promise.all([api.get('/tickets'), api.get('/users/tech')]).then(([t, u]) => {
-    setTickets(t.data); setTechUsers(u.data); setLoading(false)
-  })
+    setTickets(t.data); setTechUsers(u.data)
+  }).finally(() => setLoading(false))
   useEffect(load, [])
 
   const filtered = tickets.filter(t =>

@@ -20,8 +20,8 @@ export default function Overview() {
 
   useEffect(() => {
     Promise.all([api.get('/devices'), api.get('/tickets'), api.get('/sites')]).then(([d,t,s]) => {
-      setDevices(d.data); setTickets(t.data); setSites(s.data); setLoading(false)
-    })
+      setDevices(d.data); setTickets(t.data); setSites(s.data)
+    }).finally(() => setLoading(false))
   }, [])
 
   if (loading) return <div className="empty">Đang tải...</div>

@@ -8,7 +8,7 @@ export default function MyDevices() {
   const [collapsed, setCollapsed] = useState({})
 
   useEffect(() => {
-    api.get('/devices/mine').then(r => { setDevices(r.data); setLoading(false) })
+    api.get('/devices/mine').then(r => { setDevices(r.data) }).finally(() => setLoading(false))
   }, [])
 
   if (loading) return <div className="empty">Đang tải...</div>

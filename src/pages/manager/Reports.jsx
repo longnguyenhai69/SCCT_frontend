@@ -12,7 +12,7 @@ export default function MReports() {
 
   const load = (month) => {
     setLoading(true)
-    api.get(`/reports/stats/${month}`).then(r => { setStats(r.data); setLoading(false) })
+    api.get(`/reports/stats/${month}`).then(r => { setStats(r.data) }).finally(() => setLoading(false))
   }
   useEffect(() => load(selMonth), [selMonth])
 

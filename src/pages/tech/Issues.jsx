@@ -14,8 +14,8 @@ export default function Issues() {
 
   const load = () => {
     Promise.all([api.get('/tickets/mine'), api.get('/devices/mine')]).then(([t, d]) => {
-      setTickets(t.data); setDevices(d.data); setLoading(false)
-    })
+      setTickets(t.data); setDevices(d.data)
+    }).finally(() => setLoading(false))
   }
   useEffect(load, [])
 

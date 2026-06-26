@@ -9,8 +9,7 @@ export default function History() {
   useEffect(() => {
     api.get('/tickets/mine').then(r => {
       setTickets(r.data.filter(t => t.status === 'resolved'))
-      setLoading(false)
-    })
+    }).finally(() => setLoading(false))
   }, [])
 
   if (loading) return <div className="empty">Đang tải...</div>

@@ -7,7 +7,7 @@ export default function DTickets() {
   const [filter,  setFilter]  = useState('open')
   const [loading, setLoading] = useState(true)
 
-  const load = () => api.get('/tickets').then(r => { setTickets(r.data); setLoading(false) })
+  const load = () => api.get('/tickets').then(r => { setTickets(r.data) }).finally(() => setLoading(false))
   useEffect(load, [])
 
   const filtered = tickets.filter(t =>
