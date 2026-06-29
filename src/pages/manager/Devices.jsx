@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import Modal from '../../components/Modal'
 import Alert, { useAlert } from '../../components/Alert'
 import { StatusBadge, InspectBadge } from '../../components/Badge'
@@ -6,6 +6,22 @@ import api from '../../api'
 
 const EMPTY = { name:'', type:'', status:'normal', site_id:'', assigned_to:'', reg_no:'', inspect_expiry:'', description:'' }
 const STATUS_OPTS = [['normal','Bình thường'],['maintain','Đang bảo trì'],['pending','Chờ linh kiện']]
+
+// Khớp tiêu đề cột Excel → field theo từ khóa (chịu được khác biệt nhỏ về chữ).
+// Thứ tự quan trọng: 'đăng ký' kiểm trước 'đăng kiểm' để không nhầm.
+const HEADER_MATCHERS = [
+  ['name',    h => h.includes('tên')],
+  ['type',    h => h.includes('loại')],
+  ['site',    h => h.includes('công trường')],
+  ['assign',  h => h.includes('phân công')],
+  ['reg_no',  h => h.includes('đăng ký')],
+  ['inspect', h => h.includes('đăng kiểm')],
+  ['desc',    h => h.includes('mô tả')],
+]
+const norm = s => String(s ?? '').trim()
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/
+const th = { textAlign:'left', padding:'8px 10px', fontWeight:600, color:'#475569', borderBottom:'1px solid #e2e8f0', whiteSpace:'nowrap' }
+const td = { padding:'7px 10px', borderBottom:'1px solid #f1f5f9', verticalAlign:'top' }
 
 export default function Devices() {
   const [devices, setDevices] = useState([])
@@ -17,6 +33,10 @@ export default function Devices() {
   const [search,    setSearch]    = useState('')
   const [collapsed, setCollapsed] = useState({})
   const { alert, show, hide } = useAlert()
+
+  const [importRows, setImportRows] = useState(null)   // null = đóng modal xem trước
+  const [importing,  setImporting]  = useState(false)
+  const fileRef = useRef(null)
 
   const toggleGroup = (key) => setCollapsed(c => ({ ...c, [key]: !c[key] }))
 
@@ -51,6 +71,98 @@ export default function Devices() {
     catch (err) { show(err.response?.data?.error || 'Lỗi', 'info') }
   }
 
+  // ── Nhập từ Excel ────────────────────────────────────────────
+  function buildColMap(headerRow) {
+    const map = {}
+    headerRow.forEach((cell, idx) => {
+      const h = norm(cell).toLowerCase()
+      for (const [key, test] of HEADER_MATCHERS) {
+        if (map[key] === undefined && test(h)) { map[key] = idx; break }
+      }
+    })
+    return map
+  }
+
+  async function handleFile(e) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    try {
+      const XLSX = await import('xlsx')   // tải thư viện chỉ khi thực sự nhập file
+      const wb  = XLSX.read(await file.arrayBuffer(), { type: 'array' })
+      const ws  = wb.Sheets[wb.SheetNames[0]]
+      const aoa = XLSX.utils.sheet_to_json(ws, { header: 1, defval: '', raw: false, blankrows: false })
+      if (aoa.length < 2) return show('File không có dữ liệu', 'info')
+
+      const col = buildColMap(aoa[0])
+      if (col.name === undefined) return show('Không tìm thấy cột "Tên thiết bị" trong file', 'info')
+
+      const siteByName = new Map(sites.map(s => [norm(s.name).toLowerCase(), s]))
+      const userByName = new Map(users.map(u => [norm(u.name).toLowerCase(), u]))
+
+      const rows = []
+      for (let r = 1; r < aoa.length; r++) {
+        const get = k => col[k] === undefined ? '' : norm(aoa[r][col[k]])
+        const name = get('name'), siteName = get('site'), assignName = get('assign')
+        // bỏ qua dòng trống hoàn toàn
+        if (![name, get('type'), siteName, assignName, get('reg_no'), get('inspect'), get('desc')].some(v => v)) continue
+
+        const errors = []
+        let site_id = null, siteType = null, assigned_to = null
+        if (!name) errors.push('Thiếu tên thiết bị')
+        if (siteName) {
+          const s = siteByName.get(siteName.toLowerCase())
+          if (!s) errors.push(`Công trường "${siteName}" không tồn tại`)
+          else { site_id = s.id; siteType = s.type }
+        }
+        if (assignName) {
+          const u = userByName.get(assignName.toLowerCase())
+          if (!u) errors.push(`Không tìm thấy người "${assignName}"`)
+          else assigned_to = u.id
+        }
+        const isThuy = siteType === 'Phương tiện thủy'
+        const reg_no  = isThuy ? '' : get('reg_no')
+        const inspect = isThuy ? '' : get('inspect')
+        if (inspect && (!DATE_RE.test(inspect) || isNaN(Date.parse(inspect))))
+          errors.push('Hạn đăng kiểm phải dạng YYYY-MM-DD hợp lệ')
+
+        rows.push({
+          excelRow: r + 1, name, siteName, assignName, errors,
+          resolved: { name, type: get('type'), status: 'normal', site_id, assigned_to,
+                      reg_no: reg_no || null, inspect_expiry: inspect || null, description: get('desc') },
+        })
+      }
+      if (rows.length === 0) return show('File không có dòng dữ liệu nào', 'info')
+      setImportRows(rows)
+    } catch (err) {
+      show('Không đọc được file: ' + err.message, 'info')
+    } finally {
+      e.target.value = ''   // cho phép chọn lại cùng file sau khi sửa
+    }
+  }
+
+  async function handleImport() {
+    const valid = importRows.filter(r => r.errors.length === 0)
+    setImporting(true)
+    try {
+      await api.post('/devices/bulk', { devices: valid.map(r => r.resolved) })
+      show(`Đã nhập ${valid.length} thiết bị`, 'success')
+      setImportRows(null); load()
+    } catch (err) {
+      show(err.response?.data?.error || 'Lỗi khi nhập', 'info')
+    } finally { setImporting(false) }
+  }
+
+  function downloadTemplate() {
+    const headers = ['Tên thiết bị','Loại thiết bị','Công trường','Phân công cho','Số đăng ký','Hạn đăng kiểm (YYYY-MM-DD)','Mô tả']
+    const sample  = ['Máy phát điện 1','Máy phát', sites[0]?.name || '', users[0]?.name || '', '', '', 'Công suất 200kVA']
+    const csv = '﻿' + [headers, sample]
+      .map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\r\n')
+    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8' }))
+    const a = document.createElement('a')
+    a.href = url; a.download = 'mau_nhap_thiet_bi.csv'; a.click()
+    URL.revokeObjectURL(url)
+  }
+
   const filtered = devices.filter(d => !search || d.name.toLowerCase().includes(search.toLowerCase()) || d.site_name?.toLowerCase().includes(search.toLowerCase()))
 
   const grouped = filtered.reduce((acc, d) => {
@@ -66,8 +178,11 @@ export default function Devices() {
       <div className="page-sub">{devices.length} thiết bị</div>
       <Alert message={alert.message} type={alert.type} onClose={hide} />
 
-      <div style={{ display:'flex', gap:12, marginBottom:20 }}>
+      <div style={{ display:'flex', gap:12, marginBottom:20, flexWrap:'wrap' }}>
         <button className="btn btn-primary" onClick={openAdd}>+ Thêm thiết bị</button>
+        <button className="btn btn-outline" onClick={() => fileRef.current?.click()}>Nhập từ Excel</button>
+        <button className="btn btn-outline" onClick={downloadTemplate}>Tải mẫu</button>
+        <input ref={fileRef} type="file" accept=".xlsx,.xls,.csv" style={{ display:'none' }} onChange={handleFile} />
         <input className="form-ctrl" style={{ maxWidth:280 }} placeholder="Tìm kiếm..." value={search} onChange={e => setSearch(e.target.value)} />
       </div>
 
@@ -172,6 +287,52 @@ export default function Devices() {
           <button className="btn btn-primary" onClick={handleSave}>{editing ? 'Lưu thay đổi' : 'Thêm thiết bị'}</button>
           <button className="btn btn-outline" onClick={() => setModal(false)}>Hủy</button>
         </div>
+      </Modal>
+
+      <Modal open={!!importRows} title="Xem trước nhập từ Excel" onClose={() => setImportRows(null)} width={760}>
+        {importRows && (() => {
+          const errCount = importRows.filter(r => r.errors.length).length
+          const okCount  = importRows.length - errCount
+          return (
+            <div>
+              <div style={{ marginBottom:12, fontSize:13 }}>
+                Tổng <b>{importRows.length}</b> dòng — <span style={{ color:'#16a34a' }}>{okCount} hợp lệ</span>
+                {errCount > 0 && <span style={{ color:'#dc2626' }}> · {errCount} lỗi</span>}
+              </div>
+              <div style={{ maxHeight:'50vh', overflow:'auto', border:'1px solid #e2e8f0', borderRadius:8 }}>
+                <table style={{ width:'100%', borderCollapse:'collapse', fontSize:12 }}>
+                  <thead>
+                    <tr style={{ background:'#f1f5f9' }}>
+                      <th style={th}>Dòng</th><th style={th}>Tên</th><th style={th}>Công trường</th>
+                      <th style={th}>Phân công</th><th style={th}>Tình trạng</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {importRows.map((r, i) => {
+                      const ok = r.errors.length === 0
+                      return (
+                        <tr key={i} style={{ background: ok ? '#fff' : '#fef2f2' }}>
+                          <td style={td}>{r.excelRow}</td>
+                          <td style={td}>{r.name || <i style={{ color:'#dc2626' }}>(trống)</i>}</td>
+                          <td style={td}>{r.siteName || '—'}</td>
+                          <td style={td}>{r.assignName || '—'}</td>
+                          <td style={{ ...td, color: ok ? '#16a34a' : '#dc2626' }}>{ok ? '✓ OK' : r.errors.join('; ')}</td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              <div style={{ display:'flex', gap:8, marginTop:16, alignItems:'center', flexWrap:'wrap' }}>
+                <button className="btn btn-primary" disabled={errCount > 0 || importing} onClick={handleImport}>
+                  {importing ? 'Đang nhập...' : `Nhập ${okCount} thiết bị`}
+                </button>
+                <button className="btn btn-outline" onClick={() => setImportRows(null)}>Hủy</button>
+                {errCount > 0 && <span style={{ fontSize:12, color:'#dc2626' }}>Sửa {errCount} dòng lỗi trong file rồi tải lên lại</span>}
+              </div>
+            </div>
+          )
+        })()}
       </Modal>
     </div>
   )
